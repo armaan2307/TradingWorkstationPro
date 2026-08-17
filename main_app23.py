@@ -29,7 +29,7 @@ div[data-testid="stMetricLabel"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Trading Dashboard")
+st.title("⚡Equity Trading Dashboard")
 
 # ---------------------------------------------------------
 # 2. TOP BENCHMARK INDICES BAR
