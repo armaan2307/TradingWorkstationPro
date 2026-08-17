@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
 import streamlit as st
 import sqlite3
 import pandas as pd
@@ -17,7 +11,7 @@ from datetime import datetime
 # 1. PAGE CONFIGURATION & STYLING
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Multi-Timeframe Trading",
+    page_title="Multi-Timeframe Trade Lifecycle Workstation",
     page_icon="⚡",
     layout="wide"
 )
@@ -35,7 +29,7 @@ div[data-testid="stMetricLabel"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Trading Dashboard")
+st.title("⚡ Trade Lifecycle Workstation")
 
 # ---------------------------------------------------------
 # 2. TOP BENCHMARK INDICES BAR
@@ -87,7 +81,6 @@ def load_data(table_name, status_filter=None):
     except Exception:
         return pd.DataFrame()
 
-# Sidebar Controls
 st.sidebar.header("Workstation Controls")
 if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
     st.cache_data.clear()
@@ -138,7 +131,7 @@ def style_dataframe(df):
                         
                         pnl_pct = ((curr_price - entry_price) / entry_price) * 100
                         
-                        # If trade is newly entered today (0% spread), use today's session change
+                        # If trade is newly entered today (0% spread), use session change
                         if abs(pnl_pct) < 0.01:
                             pnl_pct = ((curr_price - prev_close) / prev_close) * 100
 
@@ -182,7 +175,7 @@ def style_dataframe(df):
     return df_styled.style.apply(color_rows, axis=1).format(active_formats)
 
 # ---------------------------------------------------------
-# 5. FUNDAMENTALS & SUMMARY FETCH ENGINE (CLOUD-RESILIENT)
+# 5. FUNDAMENTALS & SUMMARY FETCH ENGINE
 # ---------------------------------------------------------
 @st.cache_data(ttl=1800)
 def fetch_stock_info(symbol):
@@ -190,21 +183,17 @@ def fetch_stock_info(symbol):
     ticker_sym = f"{symbol}.NS" if not symbol.endswith(".NS") else symbol
     try:
         ticker = yf.Ticker(ticker_sym)
-        
-        # 1. Fast info extraction (Resilient to cloud IP rate limits)
         fast = getattr(ticker, 'fast_info', {})
         mcap = getattr(fast, 'market_cap', None)
         high52 = getattr(fast, 'year_high', None)
         low52 = getattr(fast, 'year_low', None)
         
-        # 2. Deeper metadata extraction
         info = {}
         try:
             info = ticker.info or {}
         except Exception:
             pass
 
-        # Formatting market cap in Crores (INR)
         mcap_val = mcap if mcap else info.get('marketCap')
         mcap_str = f"₹{mcap_val / 1e7:,.2f} Cr" if mcap_val else "N/A"
 
@@ -229,7 +218,7 @@ def fetch_stock_info(symbol):
             "ROE": f"{info.get('returnOnEquity', 0)*100:.2f}%" if info.get('returnOnEquity') else "N/A"
         }
         
-        summary_text = info.get("longBusinessSummary", "Company description temporarily rate-limited by external data provider. Price and technical feeds remain fully operational.")
+        summary_text = info.get("longBusinessSummary", "Company description temporarily rate-limited by data provider. Price and technical feeds remain fully operational.")
         return fundamentals, summary_text
     except Exception:
         return {}, "Could not load metrics at this time."
@@ -266,13 +255,11 @@ def render_stock_chart(symbol, selected_tf="1M", active_indicators=[]):
             row_heights=[0.7, 0.3] if rows == 2 else [1.0]
         )
         
-        # Candlestick Trace
         fig.add_trace(go.Candlestick(
             x=data.index, open=data['Open'], high=data['High'], 
             low=data['Low'], close=data['Close'], name="Price"
         ), row=1, col=1)
 
-        # Indicator Overlays
         if "20 SMA" in active_indicators:
             fig.add_trace(go.Scatter(x=data.index, y=data['Close'].rolling(20).mean(), line=dict(color='orange', width=1.5), name="20 SMA"), row=1, col=1)
         if "50 SMA" in active_indicators:
@@ -284,7 +271,6 @@ def render_stock_chart(symbol, selected_tf="1M", active_indicators=[]):
             data['VWAP'] = (tp * data['Volume']).cumsum() / data['Volume'].cumsum()
             fig.add_trace(go.Scatter(x=data.index, y=data['VWAP'], line=dict(color='cyan', width=1.5, dash='dash'), name="VWAP"), row=1, col=1)
 
-        # Oscillators
         if has_rsi:
             delta = data['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(14).mean()
@@ -313,16 +299,86 @@ def render_stock_chart(symbol, selected_tf="1M", active_indicators=[]):
         st.error(f"Chart render error: {e}")
 
 # ---------------------------------------------------------
-# 7. IN-DEPTH ANALYSIS CONTAINER (3 TABS)
+# 7. RISK & POSITION SIZING CALCULATOR ENGINE
 # ---------------------------------------------------------
-def render_stock_analysis(symbol, key_suffix="intra"):
-    """Renders Technicals, Fundamentals, and Summary in 3 clean tabs."""
+def render_risk_calculator(symbol, entry_price, target_price, stop_loss_price):
+    """Calculates position sizing, risk/reward ratio, and exact share quantity based on capital risk."""
+    st.markdown("#### 🧮 Position Size & Risk Calculator")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        total_capital = st.number_input(
+            "Total Trading Capital (₹)", 
+            min_value=1000.0, 
+            value=100000.0, 
+            step=5000.0, 
+            key=f"cap_{symbol}"
+        )
+    with col2:
+        risk_pct = st.slider(
+            "Max Risk Per Trade (%)", 
+            min_value=0.25, 
+            max_value=5.0, 
+            value=1.0, 
+            step=0.25, 
+            key=f"risk_pct_{symbol}"
+        )
+    with col3:
+        leverage = st.selectbox(
+            "Product Type / Margin", 
+            ["1x (Cash CNC / Swing)", "5x (Intraday MIS)"], 
+            key=f"lev_{symbol}"
+        )
+
+    risk_amount = total_capital * (risk_pct / 100.0)
+    per_share_risk = abs(entry_price - stop_loss_price)
+    per_share_reward = abs(target_price - entry_price)
+    
+    if per_share_risk > 0:
+        allowed_qty = int(risk_amount // per_share_risk)
+        position_value = allowed_qty * entry_price
+        
+        margin_multiplier = 5.0 if "5x" in leverage else 1.0
+        required_capital = position_value / margin_multiplier
+        
+        rr_ratio = per_share_reward / per_share_risk
+        potential_profit = allowed_qty * per_share_reward
+        potential_loss = allowed_qty * per_share_risk
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Recommended Qty", f"{allowed_qty:,} shares")
+        m2.metric("Total Trade Value", f"₹{position_value:,.2f}")
+        m3.metric("Capital Required", f"₹{required_capital:,.2f}")
+        m4.metric("Risk : Reward", f"1 : {rr_ratio:.2f}")
+
+        st.markdown("---")
+        c1, c2, c3 = st.columns(3)
+        c1.markdown(f"**Max Capital at Risk:** :red[₹{potential_loss:,.2f}] ({risk_pct}%)")
+        c2.markdown(f"**Expected Target Profit:** :green[₹{potential_profit:,.2f}] (+{(potential_profit/total_capital)*100:.2f}%)")
+        c3.markdown(f"**Per Share Risk / Reward:** ₹{per_share_risk:.2f} / ₹{per_share_reward:.2f}")
+
+        if required_capital > total_capital and margin_multiplier == 1.0:
+            st.warning("⚠️ Trade value exceeds total account capital. Reduce risk percentage or use margin.")
+    else:
+        st.info("Entry and Stop Loss are identical; unable to calculate risk metrics.")
+
+# ---------------------------------------------------------
+# 8. IN-DEPTH ANALYSIS CONTAINER (4 TABS)
+# ---------------------------------------------------------
+def render_stock_analysis(row_data, key_suffix="intra"):
+    """Renders Technicals, Fundamentals, Summary, and Risk Calculator in 4 clean tabs."""
+    symbol = row_data['symbol']
+    entry_price = float(row_data.get('entry', 0.0))
+    target_price = float(row_data.get('target', 0.0))
+    stop_loss_price = float(row_data.get('stop_loss', 0.0))
+
     st.markdown(f"### 🔍 Detailed Analysis: **{symbol}**")
     
-    tab_tech, tab_fund, tab_summ = st.tabs([
+    tab_tech, tab_fund, tab_summ, tab_risk = st.tabs([
         "📈 Technical Analysis", 
         "🏢 Fundamentals & Valuation", 
-        "📝 Company Summary"
+        "📝 Company Summary",
+        "🧮 Risk & Position Calculator"
     ])
 
     # TAB A: TECHNICALS
@@ -356,8 +412,12 @@ def render_stock_analysis(symbol, key_suffix="intra"):
         st.subheader(f"About {fundamentals.get('Company Name', symbol)}")
         st.write(summary_text)
 
+    # TAB D: RISK & POSITION SIZING
+    with tab_risk:
+        render_risk_calculator(symbol, entry_price, target_price, stop_loss_price)
+
 # ---------------------------------------------------------
-# 8. MULTI-TIMEFRAME WORKSTATION TABS
+# 9. MULTI-TIMEFRAME WORKSTATION TABS
 # ---------------------------------------------------------
 tab_intraday, tab_swing, tab_longterm, tab_history = st.tabs([
     "⚡ Intraday Hub", 
@@ -377,18 +437,19 @@ with tab_intraday:
         
         st.markdown("---")
         selected_stock = st.selectbox(
-            "📊 Select a stock to view Technicals, Fundamentals & Summary:", 
+            "📊 Select a stock to view Technicals, Fundamentals, Summary & Risk:", 
             options=df_intra['symbol'].unique(),
             key="sb_intra"
         )
         if selected_stock:
-            render_stock_analysis(selected_stock, key_suffix="intra")
+            row_data = df_intra[df_intra['symbol'] == selected_stock].iloc[0].to_dict()
+            render_stock_analysis(row_data, key_suffix="intra")
     else:
         st.info("No active intraday signals in database. Click '⚡ Run Screener Now' in the sidebar to scan the market.")
 
 # --- TAB 2: SWING PORTFOLIO ---
 with tab_swing:
-    st.subheader("🎯 Active Swing Positions")
+    st.subheader("🎯 Active Swing Positions (Capacity Managed)")
     st.caption("Positions remain ACTIVE until price action hits Target or Stop Loss.")
     
     df_swing = load_data("swing_trades", "ACTIVE")
@@ -401,18 +462,19 @@ with tab_swing:
         
         st.markdown("---")
         selected_swing_stock = st.selectbox(
-            "📊 Select a swing position to view Technicals, Fundamentals & Summary:", 
+            "📊 Select a swing position to view Technicals, Fundamentals, Summary & Risk:", 
             options=df_swing['symbol'].unique(),
             key="sb_swing"
         )
         if selected_swing_stock:
-            render_stock_analysis(selected_swing_stock, key_suffix="swing")
+            row_data_swing = df_swing[df_swing['symbol'] == selected_swing_stock].iloc[0].to_dict()
+            render_stock_analysis(row_data_swing, key_suffix="swing")
     else:
         st.info("No active swing positions in database.")
 
 # --- TAB 3: LONG-TERM COMPOUNDERS ---
 with tab_longterm:
-    st.subheader("📈 Long-Term Structural Picks")
+    st.subheader("📈 Long-Term Structural Picks (200 SMA Rides)")
     st.caption("High-conviction structural momentum compounders.")
     
     df_lt = load_data("longterm_trades", "ACTIVE")
@@ -421,12 +483,13 @@ with tab_longterm:
         
         st.markdown("---")
         selected_lt_stock = st.selectbox(
-            "📊 Select a long-term pick to view Technicals, Fundamentals & Summary:", 
+            "📊 Select a long-term pick to view Technicals, Fundamentals, Summary & Risk:", 
             options=df_lt['symbol'].unique(),
             key="sb_lt"
         )
         if selected_lt_stock:
-            render_stock_analysis(selected_lt_stock, key_suffix="lt")
+            row_data_lt = df_lt[df_lt['symbol'] == selected_lt_stock].iloc[0].to_dict()
+            render_stock_analysis(row_data_lt, key_suffix="lt")
     else:
         st.info("No active long-term positions in database.")
 
@@ -443,4 +506,3 @@ with tab_history:
         st.dataframe(style_dataframe(df_closed), use_container_width=True, hide_index=True)
     else:
         st.info("No completed (closed) trades recorded yet. History will populate automatically as targets/stop-losses are hit.")
-
