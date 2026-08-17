@@ -388,7 +388,7 @@ with tab_intraday:
 
 # --- TAB 2: SWING PORTFOLIO ---
 with tab_swing:
-    st.subheader("🎯 Active Swing Positions (Capacity Managed)")
+    st.subheader("🎯 Active Swing Positions")
     st.caption("Positions remain ACTIVE until price action hits Target or Stop Loss.")
     
     df_swing = load_data("swing_trades", "ACTIVE")
@@ -412,7 +412,7 @@ with tab_swing:
 
 # --- TAB 3: LONG-TERM COMPOUNDERS ---
 with tab_longterm:
-    st.subheader("📈 Long-Term Structural Picks (200 SMA Rides)")
+    st.subheader("📈 Long-Term Structural Picks")
     st.caption("High-conviction structural momentum compounders.")
     
     df_lt = load_data("longterm_trades", "ACTIVE")
