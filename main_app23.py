@@ -17,7 +17,7 @@ from datetime import datetime
 # 1. PAGE CONFIGURATION & STYLING
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Multi-Timeframe Trade Lifecycle Workstation",
+    page_title="Multi-Timeframe Trading",
     page_icon="⚡",
     layout="wide"
 )
@@ -35,7 +35,7 @@ div[data-testid="stMetricLabel"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Trade Lifecycle Workstation")
+st.title("⚡ Trading Dashboard")
 
 # ---------------------------------------------------------
 # 2. TOP BENCHMARK INDICES BAR
