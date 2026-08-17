@@ -11,7 +11,7 @@ from datetime import datetime
 # 1. PAGE CONFIGURATION & STYLING
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Multi-Timeframe Trade Lifecycle Workstation",
+    page_title="Multi-Timeframe Trading",
     page_icon="⚡",
     layout="wide"
 )
@@ -29,7 +29,7 @@ div[data-testid="stMetricLabel"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Trade Lifecycle Workstation")
+st.title("⚡ Trading Dashboard")
 
 # ---------------------------------------------------------
 # 2. TOP BENCHMARK INDICES BAR
@@ -449,7 +449,7 @@ with tab_intraday:
 
 # --- TAB 2: SWING PORTFOLIO ---
 with tab_swing:
-    st.subheader("🎯 Active Swing Positions (Capacity Managed)")
+    st.subheader("🎯 Active Swing Positions")
     st.caption("Positions remain ACTIVE until price action hits Target or Stop Loss.")
     
     df_swing = load_data("swing_trades", "ACTIVE")
@@ -474,7 +474,7 @@ with tab_swing:
 
 # --- TAB 3: LONG-TERM COMPOUNDERS ---
 with tab_longterm:
-    st.subheader("📈 Long-Term Structural Picks (200 SMA Rides)")
+    st.subheader("📈 Long-Term Structural Picks")
     st.caption("High-conviction structural momentum compounders.")
     
     df_lt = load_data("longterm_trades", "ACTIVE")
