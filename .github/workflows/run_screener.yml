@@ -1,0 +1,36 @@
+name: Scheduled Screener & Tracker Engine
+
+on:
+  schedule:
+    # Runs Monday to Friday at 09:30 AM IST (04:00 AM UTC) & 03:30 PM IST (10:00 AM UTC)
+    - cron: '0 4 * * 1-5'
+    - cron: '0 10 * * 1-5'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  run-screener:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install pandas numpy yfinance plotly
+
+      - name: Execute Screener Engine
+        run: |
+          python screener_engine.py
+
+      - name: Commit & Push Updated Database
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add trade_lifecycle.db
+          git commit -m "Auto-update database from scheduled screener" || echo "No changes to commit"
+          git push
