@@ -1,203 +1,223 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
-import io
-import urllib.request
-import sqlite3
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
+import sqlite3
 from datetime import datetime
 
 DB_NAME = "trade_lifecycle.db"
 
-def get_nse_tickers(url, fallback_list):
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req) as response:
-            csv_data = response.read().decode('utf-8')
-        df_nse = pd.read_csv(io.StringIO(csv_data))
-        symbols = df_nse['Symbol'].dropna().tolist()
-        return [f"{str(sym).strip()}.NS" for sym in symbols]
-    except Exception:
-        return fallback_list
-
-def fetch_universe():
-    nifty50 = get_nse_tickers("https://archives.nseindia.com/content/indices/ind_nifty50list.csv", ["RELIANCE.NS", "TCS.NS"])
-    midcap = get_nse_tickers("https://archives.nseindia.com/content/indices/ind_niftymidcap150list.csv", ["PERSISTENT.NS", "POLYCAB.NS"])
-    smallcap = get_nse_tickers("https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv", ["SUZLON.NS", "CDSL.NS"])
-    return list(set(nifty50 + midcap + smallcap))
+# ---------------------------------------------------------
+# DATABASE INITIALIZER
+# ---------------------------------------------------------
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS intraday_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            entry REAL,
+            target REAL,
+            stop_loss REAL,
+            vwap REAL,
+            rsi REAL,
+            created_at TEXT,
+            status TEXT,
+            "1D_Change_%" REAL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS swing_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            category TEXT,
+            entry REAL,
+            target REAL,
+            stop_loss REAL,
+            rsi REAL,
+            entry_date TEXT,
+            status TEXT,
+            exit_date TEXT,
+            exit_price REAL,
+            return_pct REAL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS longterm_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            entry REAL,
+            target REAL,
+            stop_loss REAL,
+            sma_200 REAL,
+            rsi REAL,
+            entry_date TEXT,
+            status TEXT,
+            exit_date TEXT,
+            exit_price REAL,
+            return_pct REAL
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 # ---------------------------------------------------------
-# 1. INTRADAY SCREENER (3:15 PM Daily Reset)
+# UNIVERSE DEFINITION
+# ---------------------------------------------------------
+def fetch_universe():
+    return [
+        "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
+        "BHARTIARTL.NS", "SBIN.NS", "LICI.NS", "ITC.NS", "HINDUNILVR.NS",
+        "LT.NS", "BAJFINANCE.NS", "HCLTECH.NS", "MARUTI.NS", "SUNPHARMA.NS",
+        "TATAMOTORS.NS", "KOTAKBANK.NS", "NTPC.NS", "ONGC.NS", "TITAN.NS",
+        "NATIONALUM.NS", "APARINDS.NS", "ZEEL.NS", "VIJAYA.NS", "SPLPETRO.NS",
+        "AARTIIND.NS", "FORCEMOT.NS", "FINCABLES.NS", "IDEA.NS", "BERGEPAINT.NS",
+        "MCX.NS", "BEML.NS", "PAYTM.NS", "POWERINDIA.NS", "GLAND.NS"
+    ]
+
+# ---------------------------------------------------------
+# INTRADAY SCANNER (SINGLE-DAY VWAP & 1D MOMENTUM)
 # ---------------------------------------------------------
 def scan_intraday(tickers):
-    print("⚡ Running Intraday Screener...")
-    data = yf.download(tickers, period="5d", interval="15m", progress=False, threads=False)
+    print("⚡ Scanning Intraday Momentum...")
     candidates = []
     today_str = datetime.now().strftime('%Y-%m-%d')
 
     for ticker in tickers:
         try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if ticker in data['Close'].columns:
-                    df = pd.DataFrame({'Close': data['Close'][ticker], 'Volume': data['Volume'][ticker]}).dropna()
-                else: continue
+            df_1d = yf.Ticker(ticker).history(period="5d", interval="1d")
+            df_15m = yf.Ticker(ticker).history(period="2d", interval="15m")
+
+            if len(df_1d) < 2 or df_15m.empty:
+                continue
+
+            prev_close = float(df_1d['Close'].iloc[-2])
+            curr_price = float(df_15m['Close'].iloc[-1])
+
+            # Session-specific VWAP
+            df_today = df_15m[df_15m.index.date == df_15m.index[-1].date()]
+            if df_today.empty or df_today['Volume'].sum() == 0:
+                day_vwap = curr_price
             else:
-                df = pd.DataFrame({'Close': data['Close'], 'Volume': data['Volume']}).dropna()
+                tp = (df_today['High'] + df_today['Low'] + df_today['Close']) / 3
+                day_vwap = float((tp * df_today['Volume']).sum() / df_today['Volume'].sum())
 
-            if len(df) < 20: continue
+            # Real 1D Price Movement
+            real_1d_change = round(((curr_price - prev_close) / prev_close) * 100, 2)
 
-            price = float(df['Close'].iloc[-1])
-            open_price = float(df['Close'].iloc[0])
-            change_pct = ((price - open_price) / open_price) * 100
+            # 14-period RSI
+            delta = df_15m['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            rs = gain / loss
+            rsi_val = float((100 - (100 / (1 + rs))).iloc[-1])
+            real_rsi = round(rsi_val, 1) if pd.notna(rsi_val) else 50.0
 
-            # Momentum filter: > 1.5% intraday gain + high volume
-            if change_pct >= 1.5:
-                candidates.append({
-                    "symbol": ticker.replace(".NS", ""),
-                    "entry": round(price, 2),
-                    "target": round(price * 1.02, 2),      # +2% intraday target
-                    "stop_loss": round(price * 0.99, 2),   # -1% intraday SL
-                    "vwap": round(price * 0.995, 2),
-                    "rsi": 62.0,
-                    "created_at": today_str,
-                    "status": "ACTIVE"
-                })
+            candidates.append({
+                "symbol": ticker.replace(".NS", ""),
+                "entry": round(curr_price, 2),
+                "target": round(curr_price * 1.02, 2),
+                "stop_loss": round(curr_price * 0.99, 2),
+                "vwap": round(day_vwap, 2),
+                "rsi": real_rsi,
+                "created_at": today_str,
+                "status": "ACTIVE",
+                "1D_Change_%": real_1d_change
+            })
         except Exception:
             continue
 
-    df_res = pd.DataFrame(candidates).head(6)
-    
-    # Refresh intraday database table
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM intraday_trades") # Clear yesterday's intraday calls
-    df_res.to_sql("intraday_trades", conn, if_exists="append", index=False)
-    conn.close()
-    print(f"✅ Intraday table refreshed with {len(df_res)} trades!")
-
-# ---------------------------------------------------------
-# 2. SWING SCREENER (Capacity-Aware Slot Filling)
-# ---------------------------------------------------------
-def scan_swing(tickers, max_capacity=8):
-    conn = sqlite3.connect(DB_NAME)
-    active_count = pd.read_sql("SELECT COUNT(*) as count FROM swing_trades WHERE status = 'ACTIVE'", conn)['count'].iloc[0]
-    
-    slots_open = max_capacity - active_count
-    print(f"🎯 Active Swing Positions: {active_count}/{max_capacity} | Open Slots: {slots_open}")
-
-    if slots_open <= 0:
-        print("ℹ️ Swing portfolio is at max capacity. Skipping scan until a position hits Target/SL.")
+    if candidates:
+        df_res = pd.DataFrame(candidates).sort_values(by="1D_Change_%", ascending=False).head(10)
+        conn = sqlite3.connect(DB_NAME)
+        df_res.to_sql("intraday_trades", conn, if_exists="replace", index=False)
         conn.close()
-        return
 
-    print("🔍 Scanning for Swing Trade setups to fill open slots...")
-    data = yf.download(tickers, period="6mo", interval="1d", progress=False, threads=False)
+# ---------------------------------------------------------
+# SWING SCANNER
+# ---------------------------------------------------------
+def scan_swing(tickers):
+    print("🎯 Scanning Swing Setups...")
     candidates = []
     today_str = datetime.now().strftime('%Y-%m-%d')
 
     for ticker in tickers:
         try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if ticker in data['Close'].columns:
-                    df = pd.DataFrame({'Close': data['Close'][ticker], 'Volume': data['Volume'][ticker]}).dropna()
-                else: continue
-            else:
-                df = pd.DataFrame({'Close': data['Close'], 'Volume': data['Volume']}).dropna()
+            df = yf.Ticker(ticker).history(period="1mo")
+            if len(df) < 14:
+                continue
 
-            if len(df) < 50: continue
-
-            df['SMA50'] = df['Close'].rolling(50).mean()
-            price = float(df['Close'].iloc[-1])
-            sma50 = float(df['SMA50'].iloc[-1])
-
+            curr_price = float(df['Close'].iloc[-1])
             delta = df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
             rs = gain / loss
-            df['RSI'] = 100 - (100 / (1 + rs))
-            rsi = float(df['RSI'].iloc[-1])
+            rsi_val = float((100 - (100 / (1 + rs))).iloc[-1])
 
-            if price > sma50 and (55 <= rsi <= 72):
-                candidates.append({
-                    "symbol": ticker.replace(".NS", ""),
-                    "category": "MidCap" if "MID" in ticker else "LargeCap",
-                    "entry": round(price, 2),
-                    "target": round(price * 1.08, 2),     # +8% target
-                    "stop_loss": round(price * 0.95, 2),  # -5% SL
-                    "rsi": round(rsi, 1),
-                    "entry_date": today_str,
-                    "status": "ACTIVE"
-                })
+            candidates.append({
+                "symbol": ticker.replace(".NS", ""),
+                "category": "LargeCap",
+                "entry": round(curr_price, 2),
+                "target": round(curr_price * 1.08, 2),
+                "stop_loss": round(curr_price * 0.95, 2),
+                "rsi": round(rsi_val, 1) if pd.notna(rsi_val) else 50.0,
+                "entry_date": today_str,
+                "status": "ACTIVE",
+                "exit_date": None,
+                "exit_price": None,
+                "return_pct": 0.0
+            })
         except Exception:
             continue
 
-    df_res = pd.DataFrame(candidates).head(slots_open)
-    if not df_res.empty:
-        df_res.to_sql("swing_trades", conn, if_exists="append", index=False)
-        print(f"✅ Added {len(df_res)} new swing trade(s) to database!")
-    conn.close()
-
-# ---------------------------------------------------------
-# 3. LONG-TERM SCREENER (200-SMA Structural Picks)
-# ---------------------------------------------------------
-def scan_longterm(tickers, max_capacity=5):
-    conn = sqlite3.connect(DB_NAME)
-    active_count = pd.read_sql("SELECT COUNT(*) as count FROM longterm_trades WHERE status = 'ACTIVE'", conn)['count'].iloc[0]
-    
-    slots_open = max_capacity - active_count
-    print(f"📈 Active Long-Term Positions: {active_count}/{max_capacity} | Open Slots: {slots_open}")
-
-    if slots_open <= 0:
-        print("ℹ️ Long-Term portfolio is full. Skipping scan.")
+    if candidates:
+        df_res = pd.DataFrame(candidates).head(8)
+        conn = sqlite3.connect(DB_NAME)
+        df_res.to_sql("swing_trades", conn, if_exists="replace", index=False)
         conn.close()
-        return
 
-    print("🔍 Scanning for Long-Term compounder setups...")
-    data = yf.download(tickers, period="1y", interval="1d", progress=False, threads=False)
+# ---------------------------------------------------------
+# LONG-TERM SCANNER (200 SMA)
+# ---------------------------------------------------------
+def scan_longterm(tickers):
+    print("📈 Scanning Long-Term Structural Picks...")
     candidates = []
     today_str = datetime.now().strftime('%Y-%m-%d')
 
     for ticker in tickers:
         try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if ticker in data['Close'].columns:
-                    df = pd.DataFrame({'Close': data['Close'][ticker]}).dropna()
-                else: continue
-            else:
-                df = pd.DataFrame({'Close': data['Close']}).dropna()
+            df = yf.Ticker(ticker).history(period="1y")
+            if len(df) < 200:
+                continue
 
-            if len(df) < 200: continue
+            sma200 = float(df['Close'].rolling(200).mean().iloc[-1])
+            curr_price = float(df['Close'].iloc[-1])
 
-            df['SMA200'] = df['Close'].rolling(200).mean()
-            price = float(df['Close'].iloc[-1])
-            sma200 = float(df['SMA200'].iloc[-1])
-
-            if price > (1.05 * sma200): # Trading > 5% above 200 SMA
+            if curr_price >= sma200:
                 candidates.append({
                     "symbol": ticker.replace(".NS", ""),
-                    "entry": round(price, 2),
-                    "target": round(price * 1.25, 2),     # +25% Long-term target
-                    "stop_loss": round(price * 0.88, 2),  # -12% Trailing SL
+                    "entry": round(curr_price, 2),
+                    "target": round(curr_price * 1.25, 2),
+                    "stop_loss": round(curr_price * 0.90, 2),
                     "sma_200": round(sma200, 2),
+                    "rsi": 55.0,
                     "entry_date": today_str,
-                    "status": "ACTIVE"
+                    "status": "ACTIVE",
+                    "exit_date": None,
+                    "exit_price": None,
+                    "return_pct": 0.0
                 })
         except Exception:
             continue
 
-    df_res = pd.DataFrame(candidates).head(slots_open)
-    if not df_res.empty:
-        df_res.to_sql("longterm_trades", conn, if_exists="append", index=False)
-        print(f"✅ Added {len(df_res)} new long-term trade(s) to database!")
-    conn.close()
+    if candidates:
+        df_res = pd.DataFrame(candidates).head(5)
+        conn = sqlite3.connect(DB_NAME)
+        df_res.to_sql("longterm_trades", conn, if_exists="replace", index=False)
+        conn.close()
 
 def run_screener():
+    init_db()
     universe = fetch_universe()
     scan_intraday(universe)
     scan_swing(universe)
@@ -205,4 +225,3 @@ def run_screener():
 
 if __name__ == "__main__":
     run_screener()
-
