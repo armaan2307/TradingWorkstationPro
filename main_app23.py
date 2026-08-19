@@ -49,8 +49,9 @@ def fetch_index_data():
             if len(data) >= 2:
                 last_price = float(data['Close'].iloc[-1])
                 prev_price = float(data['Close'].iloc[-2])
-                change_pct = ((last_price - prev_price) / prev_price) * 100
-                index_results[name] = (last_price, change_pct)
+                change_pts = last_price - prev_price
+                change_pct = (change_pts / prev_price) * 100
+                index_results[name] = (last_price, change_pts, change_pct)
         except Exception:
             continue
     return index_results
@@ -58,9 +59,10 @@ def fetch_index_data():
 indices_data = fetch_index_data()
 if indices_data:
     cols = st.columns(len(indices_data))
-    for i, (name, (price, change)) in enumerate(indices_data.items()):
+    for i, (name, (price,pts,pct)) in enumerate(indices_data.items()):
         with cols[i].container(border=True):
-            st.metric(label=name, value=f"{price:,.2f}", delta=f"{change:+.2f}%")
+            delta_str= f"{pts:+,.2f} ({pct:+.2f}%)"
+            st.metric(label=name, value=f"{price:,.2f}", delta=delta_str)
 
 st.markdown("---")
 
