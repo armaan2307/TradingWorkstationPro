@@ -83,27 +83,38 @@ def load_data(table_name, status_filter=None):
     except Exception:
         return pd.DataFrame()
 
+
+# SIDEBAR CONTROLS & SECURE ADMIN ACCESS
+
 st.sidebar.header("Workstation Controls")
 if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.header("Admin Scanner Execution")
-if st.sidebar.button("⚡ Run Screener Now (Cloud / Local)", use_container_width=True):
-    with st.spinner("Running screener engine across market universe..."):
-        try:
-            import screener_engine
-            screener_engine.run_screener()
-            st.cache_data.clear()
-            st.sidebar.success("Database scanned and updated successfully!")
-            st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"Screener execution error: {e}")
 
-# ---------------------------------------------------------
-# 4. COLOR-CODING & NUMBER FORMATTING STYLER
-# ---------------------------------------------------------
+# Password Protection for Heavy Operations
+with st.sidebar.expander("🔒 Admin Portal", expanded=False):
+    admin_password = st.text_input("Enter Admin Key", type="password")
+    
+    # Check password (read from secrets or fallback to a default password)
+    ADMIN_SECRET = st.secrets.get("ADMIN_PASSWORD", "tradeadmin2026")
+
+    if admin_password == ADMIN_SECRET:
+        st.success("Admin Authenticated")
+        if st.button("⚡ Run Screener Now (Cloud / Local)", use_container_width=True):
+            with st.spinner("Running screener engine across market universe..."):
+                try:
+                    import screener_engine
+                    screener_engine.run_screener()
+                    st.cache_data.clear()
+                    st.success("Database scanned and updated successfully!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Screener execution error: {e}")
+    elif admin_password:
+        st.error("Incorrect Admin Key")
+
 # ---------------------------------------------------------
 # 4. COLOR-CODING, NUMBER FORMATTING & LIVE CMP INJECTION
 # ---------------------------------------------------------
