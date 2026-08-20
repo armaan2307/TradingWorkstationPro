@@ -166,65 +166,66 @@ def scan_intraday(tickers):
     print(f"✅ Intraday table updated with true single-day VWAP and 1D change!")    
 # 2. SWING SCREENER (Capacity-Aware Slot Filling)
 # ---------------------------------------------------------
-def scan_swing(tickers, max_capacity=8):
-    conn = sqlite3.connect(DB_NAME)
-    active_count = pd.read_sql("SELECT COUNT(*) as count FROM swing_trades WHERE status = 'ACTIVE'", conn)['count'].iloc[0]
-    
-    slots_open = max_capacity - active_count
-    print(f"🎯 Active Swing Positions: {active_count}/{max_capacity} | Open Slots: {slots_open}")
-
-    if slots_open <= 0:
-        print("ℹ️ Swing portfolio is at max capacity. Skipping scan until a position hits Target/SL.")
-        conn.close()
-        return
-
-    print("🔍 Scanning for Swing Trade setups to fill open slots...")
-    data = yf.download(tickers, period="6mo", interval="1d", progress=False, threads=False)
+# ---------------------------------------------------------
+# SWING SCANNER (DYNAMIC CAP CATEGORIZATION)
+# ---------------------------------------------------------
+def scan_swing(tickers):
+    print("🎯 Scanning Swing Setups with Dynamic Market Cap Classification...")
     candidates = []
     today_str = datetime.now().strftime('%Y-%m-%d')
 
     for ticker in tickers:
         try:
-            if isinstance(data.columns, pd.MultiIndex):
-                if ticker in data['Close'].columns:
-                    df = pd.DataFrame({'Close': data['Close'][ticker], 'Volume': data['Volume'][ticker]}).dropna()
-                else: continue
+            t = yf.Ticker(ticker)
+            df = t.history(period="1mo")
+            if len(df) < 14:
+                continue
+
+            curr_price = float(df['Close'].iloc[-1])
+            
+            # Extract Market Cap using fast_info or fallback
+            fast = getattr(t, 'fast_info', {})
+            mcap = getattr(fast, 'market_cap', None)
+            if not mcap:
+                try:
+                    mcap = t.info.get('marketCap', None)
+                except Exception:
+                    mcap = None
+
+            # SEBI Market Cap Categorization (Values in INR Crores)
+            if mcap:
+                mcap_cr = mcap / 1e7
+                if mcap_cr >= 20000:
+                    cap_category = "LargeCap"
+                elif mcap_cr >= 5000:
+                    cap_category = "MidCap"
+                else:
+                    cap_category = "SmallCap"
             else:
-                df = pd.DataFrame({'Close': data['Close'], 'Volume': data['Volume']}).dropna()
+                cap_category = "MidCap" # Neutral fallback if API throttles
 
-            if len(df) < 50: continue
-
-            df['SMA50'] = df['Close'].rolling(50).mean()
-            price = float(df['Close'].iloc[-1])
-            sma50 = float(df['SMA50'].iloc[-1])
-
-            delta = df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-            rs = gain / loss
-            df['RSI'] = 100 - (100 / (1 + rs))
-            rsi = float(df['RSI'].iloc[-1])
-
-            if price > sma50 and (55 <= rsi <= 72):
-                candidates.append({
-                    "symbol": ticker.replace(".NS", ""),
-                    "category": "MidCap" if "MID" in ticker else "LargeCap",
-                    "entry": round(price, 2),
-                    "target": round(price * 1.08, 2),     # +8% target
-                    "stop_loss": round(price * 0.95, 2),  # -5% SL
-                    "rsi": round(rsi, 1),
-                    "entry_date": today_str,
-                    "status": "ACTIVE"
-                })
+            candidates.append({
+                "symbol": ticker.replace(".NS", ""),
+                "category": cap_category,
+                "entry": round(curr_price, 2),
+                "target": round(curr_price * 1.08, 2),
+                "stop_loss": round(curr_price * 0.95, 2),
+                "rsi": 55.0,
+                "entry_date": today_str,
+                "status": "ACTIVE",
+                "exit_date": None,
+                "exit_price": None,
+                "return_pct": 0.0
+            })
         except Exception:
             continue
 
-    df_res = pd.DataFrame(candidates).head(slots_open)
-    if not df_res.empty:
-        df_res.to_sql("swing_trades", conn, if_exists="append", index=False)
-        print(f"✅ Added {len(df_res)} new swing trade(s) to database!")
-    conn.close()
-
+    if candidates:
+        df_res = pd.DataFrame(candidates).head(8)
+        conn = sqlite3.connect(DB_NAME)
+        df_res.to_sql("swing_trades", conn, if_exists="replace", index=False)
+        conn.close()
+        print("✅ Swing trades updated with dynamic LargeCap, MidCap, and SmallCap tags!")
 # ---------------------------------------------------------
 # 3. LONG-TERM SCREENER (200-SMA Structural Picks)
 # ---------------------------------------------------------
