@@ -52,7 +52,6 @@ def init_db():
         CREATE TABLE IF NOT EXISTS swing_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             symbol TEXT,
-            category TEXT,
             entry REAL,
             target REAL,
             stop_loss REAL,
@@ -182,30 +181,9 @@ def scan_swing(tickers):
 
             curr_price = float(df['Close'].iloc[-1])
             
-            # Extract Market Cap using fast_info or fallback
-            fast = getattr(t, 'fast_info', {})
-            mcap = getattr(fast, 'market_cap', None)
-            if not mcap:
-                try:
-                    mcap = t.info.get('marketCap', None)
-                except Exception:
-                    mcap = None
-
-            # SEBI Market Cap Categorization (Values in INR Crores)
-            if mcap:
-                mcap_cr = mcap / 1e7
-                if mcap_cr >= 20000:
-                    cap_category = "LargeCap"
-                elif mcap_cr >= 5000:
-                    cap_category = "MidCap"
-                else:
-                    cap_category = "SmallCap"
-            else:
-                cap_category = "MidCap" # Neutral fallback if API throttles
 
             candidates.append({
                 "symbol": ticker.replace(".NS", ""),
-                "category": cap_category,
                 "entry": round(curr_price, 2),
                 "target": round(curr_price * 1.08, 2),
                 "stop_loss": round(curr_price * 0.95, 2),
