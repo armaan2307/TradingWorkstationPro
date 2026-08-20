@@ -303,17 +303,20 @@ def render_stock_chart(symbol, selected_tf="1M", active_indicators=[]):
 # ---------------------------------------------------------
 # 7. RISK & POSITION SIZING CALCULATOR ENGINE
 # ---------------------------------------------------------
+# ---------------------------------------------------------
+# RISK & POSITION SIZING CALCULATOR ENGINE
+# ---------------------------------------------------------
 def render_risk_calculator(symbol, entry_price, target_price, stop_loss_price):
-    """Calculates position sizing, risk/reward ratio, and exact share quantity based on capital risk."""
+    """Calculates position sizing capped strictly by available account capital and risk rules."""
     st.markdown("#### 🧮 Position Size & Risk Calculator")
     
     col1, col2, col3 = st.columns(3)
     with col1:
         total_capital = st.number_input(
             "Total Trading Capital (₹)", 
-            min_value=1000.0, 
-            value=100000.0, 
-            step=5000.0, 
+            min_value=100.0, 
+            value=10000.0, 
+            step=1000.0, 
             key=f"cap_{symbol}"
         )
     with col2:
@@ -321,7 +324,7 @@ def render_risk_calculator(symbol, entry_price, target_price, stop_loss_price):
             "Max Risk Per Trade (%)", 
             min_value=0.25, 
             max_value=5.0, 
-            value=1.0, 
+            value=2.0, 
             step=0.25, 
             key=f"risk_pct_{symbol}"
         )
@@ -332,21 +335,32 @@ def render_risk_calculator(symbol, entry_price, target_price, stop_loss_price):
             key=f"lev_{symbol}"
         )
 
-    risk_amount = total_capital * (risk_pct / 100.0)
+    # 1. Price Deltas
     per_share_risk = abs(entry_price - stop_loss_price)
     per_share_reward = abs(target_price - entry_price)
     
-    if per_share_risk > 0:
-        allowed_qty = int(risk_amount // per_share_risk)
-        position_value = allowed_qty * entry_price
-        
+    if per_share_risk > 0 and entry_price > 0:
         margin_multiplier = 5.0 if "5x" in leverage else 1.0
-        required_capital = position_value / margin_multiplier
+        max_purchasing_power = total_capital * margin_multiplier
         
+        # Max quantity allowed by risk limit
+        risk_amount = total_capital * (risk_pct / 100.0)
+        risk_qty = int(risk_amount // per_share_risk)
+        
+        # Max quantity allowed by capital limit
+        capital_qty = int(max_purchasing_power // entry_price)
+        
+        # Take the stricter limit
+        allowed_qty = min(risk_qty, capital_qty)
+        
+        # Final Metrics
+        position_value = allowed_qty * entry_price
+        required_capital = position_value / margin_multiplier
         rr_ratio = per_share_reward / per_share_risk
-        potential_profit = allowed_qty * per_share_reward
-        potential_loss = allowed_qty * per_share_risk
+        actual_risk_amount = allowed_qty * per_share_risk
+        actual_profit_amount = allowed_qty * per_share_reward
 
+        # Display Metrics
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Recommended Qty", f"{allowed_qty:,} shares")
         m2.metric("Total Trade Value", f"₹{position_value:,.2f}")
@@ -355,15 +369,14 @@ def render_risk_calculator(symbol, entry_price, target_price, stop_loss_price):
 
         st.markdown("---")
         c1, c2, c3 = st.columns(3)
-        c1.markdown(f"**Max Capital at Risk:** :red[₹{potential_loss:,.2f}] ({risk_pct}%)")
-        c2.markdown(f"**Expected Target Profit:** :green[₹{potential_profit:,.2f}] (+{(potential_profit/total_capital)*100:.2f}%)")
+        c1.markdown(f"**Actual Risk Exposure:** :red[₹{actual_risk_amount:,.2f}] ({(actual_risk_amount/total_capital)*100:.2f}%)")
+        c2.markdown(f"**Expected Target Profit:** :green[₹{actual_profit_amount:,.2f}] (+{(actual_profit_amount/total_capital)*100:.2f}%)")
         c3.markdown(f"**Per Share Risk / Reward:** ₹{per_share_risk:.2f} / ₹{per_share_reward:.2f}")
 
-        if required_capital > total_capital and margin_multiplier == 1.0:
-            st.warning("⚠️ Trade value exceeds total account capital. Reduce risk percentage or use margin.")
+        if allowed_qty == capital_qty and capital_qty < risk_qty:
+            st.info("💡 Position size capped by available capital rather than the maximum risk threshold.")
     else:
-        st.info("Entry and Stop Loss are identical; unable to calculate risk metrics.")
-
+        st.warning("Cannot calculate sizing: Entry and Stop Loss prices are identical or invalid.")
 # ---------------------------------------------------------
 # 8. IN-DEPTH ANALYSIS CONTAINER (4 TABS)
 # ---------------------------------------------------------
