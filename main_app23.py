@@ -104,43 +104,59 @@ if st.sidebar.button("⚡ Run Screener Now (Cloud / Local)", use_container_width
 # ---------------------------------------------------------
 # 4. COLOR-CODING & NUMBER FORMATTING STYLER
 # ---------------------------------------------------------
+# ---------------------------------------------------------
+# 4. COLOR-CODING, NUMBER FORMATTING & LIVE CMP INJECTION
+# ---------------------------------------------------------
 def style_dataframe(df):
-    """Formats numbers cleanly and highlights rows based on active momentum and real P&L."""
+    """Replaces RSI with live Current Market Price (CMP) and formats rows with live P&L."""
     if df.empty:
         return df
 
     df_styled = df.copy()
 
-    # Fallback for Intraday Hub 1D Change
+    # 1. Fallback for Intraday Hub 1D Change
     if '1D_Change_%' not in df_styled.columns and 'entry' in df_styled.columns and 'vwap' in df_styled.columns:
         df_styled['1D_Change_%'] = ((df_styled['entry'] - df_styled['vwap']) / df_styled['vwap']) * 100
 
-    # Dynamic Return % Calculation for Active Swing / Long-Term Positions
-    if 'return_pct' in df_styled.columns and 'status' in df_styled.columns and 'symbol' in df_styled.columns:
-        active_mask = (df_styled['status'] == 'ACTIVE') & df_styled['symbol'].notna() & df_styled['entry'].notna()
+    # 2. Add 'current_price' Column & Calculate Dynamic P&L
+    df_styled['current_price'] = df_styled.get('entry', 0.0)
+
+    if 'status' in df_styled.columns and 'symbol' in df_styled.columns:
+        active_mask = (df_styled['status'] == 'ACTIVE') & df_styled['symbol'].notna()
         
-        if active_mask.any():
-            for idx in df_styled[active_mask].index:
-                try:
-                    sym = str(df_styled.loc[idx, 'symbol']).strip()
-                    sym_ticker = f"{sym}.NS" if not sym.endswith(".NS") else sym
-                    entry_price = float(df_styled.loc[idx, 'entry'])
+        for idx in df_styled[active_mask].index:
+            try:
+                sym = str(df_styled.loc[idx, 'symbol']).strip()
+                sym_ticker = f"{sym}.NS" if not sym.endswith(".NS") else sym
+                entry_price = float(df_styled.loc[idx, 'entry']) if 'entry' in df_styled.columns else 0.0
 
-                    t_data = yf.Ticker(sym_ticker).history(period="5d")
-                    if len(t_data) >= 2:
-                        curr_price = float(t_data['Close'].iloc[-1])
-                        prev_close = float(t_data['Close'].iloc[-2])
-                        
+                t_data = yf.Ticker(sym_ticker).history(period="5d")
+                if len(t_data) >= 1:
+                    curr_price = float(t_data['Close'].iloc[-1])
+                    df_styled.loc[idx, 'current_price'] = curr_price
+
+                    if 'return_pct' in df_styled.columns and entry_price > 0:
                         pnl_pct = ((curr_price - entry_price) / entry_price) * 100
-                        
-                        # If trade is newly entered today (0% spread), use session change
-                        if abs(pnl_pct) < 0.01:
+                        if abs(pnl_pct) < 0.01 and len(t_data) >= 2:
+                            prev_close = float(t_data['Close'].iloc[-2])
                             pnl_pct = ((curr_price - prev_close) / prev_close) * 100
-
                         df_styled.loc[idx, 'return_pct'] = round(pnl_pct, 2)
-                except Exception:
-                    continue
+            except Exception:
+                continue
 
+    # 3. Drop the redundant RSI column if present
+    if 'rsi' in df_styled.columns:
+        df_styled = df_styled.drop(columns=['rsi'])
+
+    # 4. Reorder Columns to place current_price cleanly next to entry
+    cols = list(df_styled.columns)
+    if 'current_price' in cols and 'entry' in cols:
+        cols.remove('current_price')
+        entry_pos = cols.index('entry')
+        cols.insert(entry_pos + 1, 'current_price')
+        df_styled = df_styled[cols]
+
+    # 5. Row Color Highlights
     def color_rows(row):
         val = row.get("1D_Change_%", row.get("return_pct", None))
         if pd.notna(val):
@@ -152,30 +168,27 @@ def style_dataframe(df):
                 return ['background-color: #d4edda; color: #155724; font-weight: bold'] * len(row)
         return [''] * len(row)
 
+    # 6. Formatters
     def fmt_currency(val):
         return f"₹{val:,.2f}" if pd.notna(val) else "-"
-
-    def fmt_num(val):
-        return f"{val:.1f}" if pd.notna(val) else "-"
 
     def fmt_pct(val):
         return f"{val:+.2f}%" if pd.notna(val) else "-"
 
     format_dict = {
         "entry": fmt_currency,
+        "current_price": fmt_currency,
         "target": fmt_currency,
         "stop_loss": fmt_currency,
         "vwap": fmt_currency,
         "exit_price": fmt_currency,
         "sma_200": fmt_currency,
-        "rsi": fmt_num,
         "1D_Change_%": fmt_pct,
         "return_pct": fmt_pct
     }
 
     active_formats = {k: v for k, v in format_dict.items() if k in df_styled.columns}
     return df_styled.style.apply(color_rows, axis=1).format(active_formats)
-
 # ---------------------------------------------------------
 # 5. FUNDAMENTALS & SUMMARY FETCH ENGINE
 # ---------------------------------------------------------
