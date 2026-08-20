@@ -52,6 +52,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS swing_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             symbol TEXT,
+            category TEXT,
             entry REAL,
             target REAL,
             stop_loss REAL,
@@ -163,46 +164,69 @@ def scan_intraday(tickers):
     df_res.to_sql("intraday_trades", conn, if_exists="replace", index=False)
     conn.close()
     print(f"✅ Intraday table updated with true single-day VWAP and 1D change!")    
+# 2. SWING SCREENER
+# ---------------------------------------------------------
+def scan_swing(tickers, max_capacity=8):
+    conn = sqlite3.connect(DB_NAME)
+    active_count = pd.read_sql("SELECT COUNT(*) as count FROM swing_trades WHERE status = 'ACTIVE'", conn)['count'].iloc[0]
+    
+    slots_open = max_capacity - active_count
+    print(f"🎯 Active Swing Positions: {active_count}/{max_capacity} | Open Slots: {slots_open}")
 
-# ---------------------------------------------------------
-# SWING SCANNER (DYNAMIC CAP CATEGORIZATION)
-# ---------------------------------------------------------
-def scan_swing(tickers):
-    print("🎯 Scanning Swing Setups with Dynamic Market Cap Classification...")
+    if slots_open <= 0:
+        print("ℹ️ Swing portfolio is at max capacity. Skipping scan until a position hits Target/SL.")
+        conn.close()
+        return
+
+    print("🔍 Scanning for Swing Trade setups to fill open slots...")
+    data = yf.download(tickers, period="6mo", interval="1d", progress=False, threads=False)
     candidates = []
     today_str = datetime.now().strftime('%Y-%m-%d')
 
     for ticker in tickers:
         try:
-            t = yf.Ticker(ticker)
-            df = t.history(period="1mo")
-            if len(df) < 14:
-                continue
+            if isinstance(data.columns, pd.MultiIndex):
+                if ticker in data['Close'].columns:
+                    df = pd.DataFrame({'Close': data['Close'][ticker], 'Volume': data['Volume'][ticker]}).dropna()
+                else: continue
+            else:
+                df = pd.DataFrame({'Close': data['Close'], 'Volume': data['Volume']}).dropna()
 
-            curr_price = float(df['Close'].iloc[-1])
-            
+            if len(df) < 50: continue
 
-            candidates.append({
-                "symbol": ticker.replace(".NS", ""),
-                "entry": round(curr_price, 2),
-                "target": round(curr_price * 1.08, 2),
-                "stop_loss": round(curr_price * 0.95, 2),
-                "rsi": 55.0,
-                "entry_date": today_str,
-                "status": "ACTIVE",
-                "return_pct": 0.0
-            })
+            df['SMA50'] = df['Close'].rolling(50).mean()
+            price = float(df['Close'].iloc[-1])
+            sma50 = float(df['SMA50'].iloc[-1])
+
+            delta = df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            rs = gain / loss
+            df['RSI'] = 100 - (100 / (1 + rs))
+            rsi = float(df['RSI'].iloc[-1])
+
+            if price > sma50 and (55 <= rsi <= 72):
+                candidates.append({
+                    "symbol": ticker.replace(".NS", ""),
+                    "category": "MidCap" if "MID" in ticker else "LargeCap",
+                    "entry": round(price, 2),
+                    "target": round(price * 1.08, 2),     # +8% target
+                    "stop_loss": round(price * 0.95, 2),  # -5% SL
+                    "rsi": round(rsi, 1),
+                    "entry_date": today_str,
+                    "status": "ACTIVE"
+                })
         except Exception:
             continue
 
-    if candidates:
-        df_res = pd.DataFrame(candidates).head(8)
-        conn = sqlite3.connect(DB_NAME)
-        df_res.to_sql("swing_trades", conn, if_exists="replace", index=False)
-        conn.close()
-        print("✅ Swing trades updated with dynamic LargeCap, MidCap, and SmallCap tags!")
+    df_res = pd.DataFrame(candidates).head(slots_open)
+    if not df_res.empty:
+        df_res.to_sql("swing_trades", conn, if_exists="append", index=False)
+        print(f"✅ Added {len(df_res)} new swing trade(s) to database!")
+    conn.close()
+
 # ---------------------------------------------------------
-# 3. LONG-TERM SCREENER (200-SMA Structural Picks)
+# 3. LONG-TERM SCREENER
 # ---------------------------------------------------------
 def scan_longterm(tickers, max_capacity=5):
     conn = sqlite3.connect(DB_NAME)
