@@ -145,9 +145,10 @@ def style_dataframe(df):
                 continue
 
     # 3. Drop the redundant RSI column if present
-    if 'rsi' in df_styled.columns:
-        df_styled = df_styled.drop(columns=['rsi'])
-
+    drop_cols=[c for c in ['rsi', 'category'] if c in df_styled.columns]
+    if drop_cols:
+        df_styled = df_styled.drop(columns=drop_cols)
+    
     # 4. Reorder Columns to place current_price cleanly next to entry
     cols = list(df_styled.columns)
     if 'current_price' in cols and 'entry' in cols:
