@@ -164,8 +164,7 @@ def scan_intraday(tickers):
     df_res.to_sql("intraday_trades", conn, if_exists="replace", index=False)
     conn.close()
     print(f"✅ Intraday table updated with true single-day VWAP and 1D change!")    
-# 2. SWING SCREENER (Capacity-Aware Slot Filling)
-# ---------------------------------------------------------
+
 # ---------------------------------------------------------
 # SWING SCANNER (DYNAMIC CAP CATEGORIZATION)
 # ---------------------------------------------------------
@@ -213,8 +212,6 @@ def scan_swing(tickers):
                 "rsi": 55.0,
                 "entry_date": today_str,
                 "status": "ACTIVE",
-                "exit_date": None,
-                "exit_price": None,
                 "return_pct": 0.0
             })
         except Exception:
